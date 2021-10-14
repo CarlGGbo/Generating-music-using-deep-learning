@@ -1,5 +1,4 @@
 import Data_preprocess
-
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader,Dataset
@@ -8,26 +7,14 @@ import numpy as np
 import os
 
 
-
-# args = Namespace(
-#     seed=1234,
-#     cuda=True,
-#     path="data",
-#     train_batch_size=32,
-#     val_batch_size=32,
-#     num_workers=1,
-#     myembedding_dim = 100,
-#     learning_rate = 0.001
-# )
-
-
-#train_file_path ->  midi_file
+#train_file_path ->  midi_file_name
 def read_midi(file_path, num):
     files = [file_path + i for i in os.listdir(file_path) if i.endswith(".midi")]
     files = files[0:num]
     return files
 
-#preprocess data  -> array_like data
+
+#midi_file_name  -> data with array structure
 def preprocess(midi_files, max_length,save = False):
 
     data_X = np.zeros((1,max_length))
@@ -49,6 +36,7 @@ def preprocess(midi_files, max_length,save = False):
 
     return data_X, data_Y
 
+#midi_file_name  -> data with array structure   (save the data to  .npy file)
 def preprocess2(midi_files, max_length,save = False):
     data_X = np.zeros((600000, max_length))
     data_Y = np.zeros((600000, max_length))
@@ -71,6 +59,7 @@ def preprocess2(midi_files, max_length,save = False):
 
     return data_X, data_Y
 
+# class Mydataset
 class MyDataset(Dataset):
     def __init__(self, x, y):
         self.x = x
@@ -82,39 +71,48 @@ class MyDataset(Dataset):
     def __getitem__(self, idx):
         return (torch.LongTensor(self.x[idx]),torch.LongTensor(self.y[idx]))
 
+#class RNNModel
+#structue:
+# embedding (276,128)
+# lstm(128,256)
+# fc(256,300)
+# relu()
+# fc(300,276)
 class RNNModel(nn.Module):
     def __init__(self):
         super(RNNModel, self).__init__()
         self.n_notes = 276
-        self.emb_dim = 32
-        self.lstm_hidden_size = 128
-        self.lstm_layer = 10
+        self.emb_dim = 128
+        self.lstm_hidden_size = 256
+        self.lstm_layer = 2
         self.emb = nn.Embedding(self.n_notes,self.emb_dim)
         self.lstm = nn.LSTM(
             input_size = self.emb_dim,
             hidden_size = self.lstm_hidden_size,
             num_layers = self.lstm_layer,
-            dropout=0.3
+            batch_first=True
         )
-        self.linear = nn.Linear(self.lstm_hidden_size, self.n_notes)
+        self.linear = nn.Linear(300, self.n_notes)
+        self.fc = nn.Linear(self.lstm_hidden_size, 300)
+        self.relu = nn.ReLU()
 
     def forward(self, x, h = None):
         x = self.emb(x)
         x, h = self.lstm(x, h)
+        x = x[:,-1,:]
+        x = self.fc(x)
+        x = self.relu(x)
         x = self.linear(x)
-
         return x, h
 
-    # def init_state(self, sequence_length):
-    #     return (torch.zeros(self.num_layers, sequence_length, self.lstm_size),
-    #             torch.zeros(self.num_layers, sequence_length, self.lstm_size))
 
-def train(model, n_epoch, dataloader):
+#train method
+def train(model, n_epoch, dataloader, save):
 
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0002)
 
-    print(len(dataloader))
+    #print('Shape of dataloader:'.format(len(dataloader)))
 
     print('training----')
     model.train()
@@ -123,16 +121,19 @@ def train(model, n_epoch, dataloader):
 
         total_loss = 0
         for step, batch in enumerate(dataloader):
-            if step % 50 == 0 and not step == 0:
-                print('batch:{}/{}'.format(step,len(dataloader)))
+            if step % 500 == 0 and not step == 0:
+                print('batch:{}/{}-------------{}%'.format(step,len(dataloader),int((step/len(dataloader)*100))))
+                print(test[-1])
 
             x = batch[0].to(device)
             y = batch[1].to(device)
 
             model.zero_grad()
             pre_y,_ = model(x)
+            new_note = nn.Softmax(dim=1)(pre_y)
+            test = np.argmax(new_note.cpu().detach().numpy(), axis=1)
 
-            loss = loss_fn(pre_y.permute(0, 2, 1), y)
+            loss = loss_fn(pre_y, y[:,-1])
             total_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -141,68 +142,116 @@ def train(model, n_epoch, dataloader):
         loss_his.append(avg_loss)
         print('EPOCH:{}/{}------LOSS:{}'.format(i, n_epoch, avg_loss))
 
+        if save:
+            torch.save(model.state_dict(), 'weight/RNN_weight_test.pt')
     return loss_his
 
-#seq_begin list
+
+#generate midi file method
 def generate_midi(model, seq_begin, max_length):
     print('Generating------')
     model.eval()
-    h = torch.zeros(model.lstm_layer, 256, model.lstm_hidden_size).to(device)
-    c = torch.zeros(model.lstm_layer, 256, model.lstm_hidden_size).to(device)
+    h = torch.zeros(model.lstm_layer, 1, model.lstm_hidden_size).to(device)
+    c = torch.zeros(model.lstm_layer, 1, model.lstm_hidden_size).to(device)
     x = torch.LongTensor(seq_begin)
     x = torch.unsqueeze(x, dim=0).to(device)
 
     for i in range(max_length):
-        print(i)
         new, (h, c) = model(x, (h, c))
         new = torch.squeeze(new, dim = 0)
-        new_note = nn.Softmax(dim=1)(new)
-        new_note = np.argmax(new_note[-1].cpu().detach().numpy())
-
-        seq_begin.append(new_note)
+        new_note = nn.Softmax(dim=0)(new)
+        new_note_id = np.argmax(new_note.cpu().detach().numpy(),axis=0)
+        #print(new_note_id)
+        #new_note = np.argmax(new_note[-1].cpu().detach().numpy())
+        seq_begin.append(new_note_id)
         x = torch.unsqueeze(torch.LongTensor(seq_begin[i+1:]),dim=0).to(device)
-
-
     return seq_begin
 
-midi_files = read_midi('dataset/data/train/',700)
 
-#data_x,data_y = preprocess2(midi_files,256,True)
 
-data_x = np.load('data_X_256.npy')
-data_y = np.load('data_Y_256.npy')
-
-data_x = data_x[:80000]
-data_y =data_y[:80000]
-#split
-
-train_x, val_x, train_y, val_y = train_test_split(data_x, data_y, random_state=2021, test_size=0.2)
-
-#dataset
-train_dataset = MyDataset(train_x,train_y)
-val_dataset = MyDataset(val_x,val_y)
-
-#dataloader
-train_dataloader = DataLoader(train_dataset, batch_size=32)
-val_dataloader = DataLoader(val_dataset, batch_size=32)
+# main function
 
 #parameter
-#n_epoch = 100
+If_train = False
+If_generate = True
+If_save_weight = False
+If_load_weight_for_training = True
+If_load_weight_for_generating = True
+Start_midi_file = 'dataset/data/train/235.midi'    # use first 16 tokens to generate
+Generated_midi_length = 1000                       # how long you want to generate
+Generated_midi_name = 'generated_example/test_RNN_001.midi'              # generated files name
 
+
+# get device
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 #model
 model = RNNModel()
 model.to(device)
 
-#train
-#train(model, 10, train_dataloader)
 
-#torch.save(model.state_dict(), 'weight.pt')
-path = 'weight.pt'
-model.load_state_dict(torch.load(path))
+# used in training
+if If_train:
+    midi_files = read_midi('dataset/data/train/',700)  #use 700 midi files
+
+    #data_x,data_y = preprocess2(midi_files,256,True)   # save the array to npy
+
+    if os.path.exists('data_X_256.npy') and os.path.exists('data_Y_256.npy'):
+        data_x = np.load('data_X_256.npy')
+        data_y = np.load('data_Y_256.npy')
+    else:
+        raise FileNotFoundError('There is not any npy files, you should run the 181 line')
+
+    print(data_x.shape)
+
+    data_x = data_x[:410000,:16]   #sequece length = 16
+    data_y =data_y[:410000,:16]
+
+    print(data_x.shape)
+    #split
+    train_x, val_x, train_y, val_y = train_test_split(data_x, data_y, random_state=2021, test_size=0.2)
+
+    #dataset
+    train_dataset = MyDataset(train_x,train_y)
+    val_dataset = MyDataset(val_x,val_y)
+
+    #dataloader
+    train_dataloader = DataLoader(train_dataset, batch_size=32)
+    val_dataloader = DataLoader(val_dataset, batch_size=32)
+
+    #parameter
+    n_epoch = 50
+
+    if If_load_weight_for_training:
+
+        path = 'weight/RNN_weight.pt'
+    model.load_state_dict(torch.load(path))
+    #train
+    train(model, n_epoch, train_dataloader,If_save_weight)
+
+    #torch.save(model.state_dict(), 'weight4.pt')
+
+
 #generate
-first = Data_preprocess.Encode('dataset/data/train/000.midi')
-first = first[0:256]
-pred = generate_midi(model, first, 600)
-print(pred)
+if If_generate:
+
+    if If_load_weight_for_generating:
+        path = 'weight/RNN_weight.pt'
+        model.load_state_dict(torch.load(path))
+
+    first = Data_preprocess.Encode(Start_midi_file)
+    # print(first[0:16])
+    # print(first[16:128])
+    # print(first[256:364])
+
+    first = first[0:16]
+
+    pred = generate_midi(model, first, Generated_midi_length)
+
+    Data_preprocess.Decode(pred,Generated_midi_name,True)
+
+    print('finished------')
+
+    # print(pred[0:16])
+    # print(pred[16:128])
+    # print(pred[256:364])

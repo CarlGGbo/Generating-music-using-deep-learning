@@ -1,9 +1,9 @@
 import pretty_midi
 
 
-#0-87 note_on
-#88-175 note_off
-#176-275 time_shift
+# 0-87 note_on
+# 88-175 note_off
+# 176-275 time_shift
 NOTE_ON_SIGN = 0
 NOTE_OFF_SIGN = 88
 TIME_SHIFT_SIGN = 176
@@ -74,7 +74,7 @@ def Encode(filepath = None):
 
     return array
 
-def Decode(array):
+def Decode(array,file_path,save=False):
     time = 0
     notes_dic = {}
     all_notes = []
@@ -102,15 +102,15 @@ def Decode(array):
     instument.notes = all_notes
 
     mid.instruments.append(instument)
-    # file_path = ('test.midi')
-    # if file_path is not None:
-    #     mid.write(file_path)
+
+    if file_path is not None and save:
+        mid.write(file_path)
 
     return mid
 
 
 
-#
+# Test code
 # a = Encode('dataset/data/train/000.midi')
 #
 # Decode(a)
