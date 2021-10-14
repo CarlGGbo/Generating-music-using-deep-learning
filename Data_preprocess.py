@@ -4,6 +4,7 @@ import pretty_midi
 # 0-87 note_on
 # 88-175 note_off
 # 176-275 time_shift
+
 NOTE_ON_SIGN = 0
 NOTE_OFF_SIGN = 88
 TIME_SHIFT_SIGN = 176

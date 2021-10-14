@@ -190,6 +190,7 @@ model = RNNModel()
 model.to(device)
 
 
+
 # used in training
 if If_train:
     midi_files = read_midi('dataset/data/train/',700)  #use 700 midi files
